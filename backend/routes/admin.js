@@ -13,20 +13,29 @@ router.get('/stats', authMiddleware, adminMiddleware, async (req, res) => {
         // Get total users
         const totalUsers = await User.countDocuments();
         
-        // Get active subscriptions (placeholder - will be implemented with Stripe)
-        const activeSubscriptions = 0;
+        // Get active subscriptions - FIX THIS
+        const activeSubscriptions = await Subscription.countDocuments({ 
+            status: 'active' 
+        });
         
-        // Get total prize pool from draws
+        // Get total prize pool from draws (if any)
         const prizePoolResult = await Draw.aggregate([
             { $group: { _id: null, total: { $sum: "$prize_pool" } } }
         ]);
         const totalPrizePool = prizePoolResult[0]?.total || 0;
         
-        // Get total charity contributions from users
+        // Get total charity contributions
         const charityResult = await User.aggregate([
             { $group: { _id: null, total: { $sum: "$charity_percentage" } } }
         ]);
         const totalCharityContributions = charityResult[0]?.total || 0;
+        
+        console.log('Stats calculated:', {
+            totalUsers,
+            activeSubscriptions,
+            totalPrizePool,
+            totalCharityContributions
+        });
         
         res.json({
             total_users: totalUsers,
