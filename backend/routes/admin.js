@@ -5,6 +5,7 @@ const Charity = require('../models/Charity');
 const Draw = require('../models/Draw');
 const Winner = require('../models/Winner');
 const GolfScore = require('../models/GolfScore');
+const Subscription = require('../models/Subscription'); // ← ADD THIS LINE
 const router = express.Router();
 
 // Get admin dashboard stats
@@ -13,18 +14,18 @@ router.get('/stats', authMiddleware, adminMiddleware, async (req, res) => {
         // Get total users
         const totalUsers = await User.countDocuments();
         
-        // Get active subscriptions - FIX THIS
+        // Get active subscriptions
         const activeSubscriptions = await Subscription.countDocuments({ 
             status: 'active' 
         });
         
-        // Get total prize pool from draws (if any)
+        // Get total prize pool from draws
         const prizePoolResult = await Draw.aggregate([
             { $group: { _id: null, total: { $sum: "$prize_pool" } } }
         ]);
         const totalPrizePool = prizePoolResult[0]?.total || 0;
         
-        // Get total charity contributions
+        // Get total charity contributions from users
         const charityResult = await User.aggregate([
             { $group: { _id: null, total: { $sum: "$charity_percentage" } } }
         ]);
@@ -45,7 +46,7 @@ router.get('/stats', authMiddleware, adminMiddleware, async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching stats:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Server error', details: error.message });
     }
 });
 
@@ -56,10 +57,17 @@ router.get('/users', authMiddleware, adminMiddleware, async (req, res) => {
             .select('-password_hash')
             .sort({ created_at: -1 });
         
-        // Add subscription status placeholder
-        const usersWithStatus = users.map(user => ({
-            ...user.toObject(),
-            subscription_status: 'inactive' // Will be updated with Stripe integration
+        // Add subscription status for each user
+        const usersWithStatus = await Promise.all(users.map(async (user) => {
+            const subscription = await Subscription.findOne({ 
+                user_id: user._id, 
+                status: 'active' 
+            });
+            return {
+                ...user.toObject(),
+                subscription_status: subscription ? 'active' : 'inactive',
+                subscription_plan: subscription?.plan_type
+            };
         }));
         
         res.json(usersWithStatus);
@@ -105,7 +113,6 @@ router.post('/charities', authMiddleware, adminMiddleware, async (req, res) => {
 });
 
 // Update charity
-// Update charity
 router.put('/charities/:id', authMiddleware, adminMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
@@ -114,7 +121,7 @@ router.put('/charities/:id', authMiddleware, adminMiddleware, async (req, res) =
         const charity = await Charity.findByIdAndUpdate(
             id,
             { name, description, logo_url, website, is_featured },
-            { returnDocument: 'after', runValidators: true } // Changed from { new: true }
+            { new: true, runValidators: true }
         );
         
         if (!charity) {
@@ -133,7 +140,6 @@ router.delete('/charities/:id', authMiddleware, adminMiddleware, async (req, res
     try {
         const { id } = req.params;
         
-        // Check if charity is being used by any user
         const usersWithCharity = await User.findOne({ charity_id: id });
         if (usersWithCharity) {
             return res.status(400).json({ error: 'Cannot delete charity that is being used by users' });
@@ -157,7 +163,6 @@ router.get('/draws', authMiddleware, adminMiddleware, async (req, res) => {
     try {
         const draws = await Draw.find().sort({ draw_date: -1 });
         
-        // Get winner counts for each draw
         const drawsWithCounts = await Promise.all(draws.map(async (draw) => {
             const winnerCount = await Winner.countDocuments({ draw_id: draw._id });
             return {
@@ -174,7 +179,6 @@ router.get('/draws', authMiddleware, adminMiddleware, async (req, res) => {
 });
 
 // Create draw
-// Create draw
 router.post('/draws', authMiddleware, adminMiddleware, async (req, res) => {
     try {
         const { draw_date, draw_type } = req.body;
@@ -187,17 +191,17 @@ router.post('/draws', authMiddleware, adminMiddleware, async (req, res) => {
             draw_date: new Date(draw_date),
             draw_type,
             status: 'pending',
-            winning_numbers: [] // Empty array for pending draws
+            winning_numbers: []
         });
         
         res.status(201).json(draw);
     } catch (error) {
         console.error('Error creating draw:', error);
-        res.status(500).json({ error: 'Server error', details: error.message });
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
-// Run draw (generate winners)
+// Run draw
 router.post('/draws/:id/run', authMiddleware, adminMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
@@ -211,7 +215,7 @@ router.post('/draws/:id/run', authMiddleware, adminMiddleware, async (req, res) 
             return res.status(400).json({ error: 'Draw already processed' });
         }
         
-        // Generate random winning numbers (5 numbers between 1-45)
+        // Generate random winning numbers
         const winningNumbers = [];
         while (winningNumbers.length < 5) {
             const num = Math.floor(Math.random() * 45) + 1;
@@ -220,68 +224,24 @@ router.post('/draws/:id/run', authMiddleware, adminMiddleware, async (req, res) 
             }
         }
         
-        // Get all users with scores
         const users = await User.find();
-        
-        // Generate winners based on draw type
         const winners = [];
         
         if (draw.draw_type === 'random') {
-            // Random winner selection
-            const eligibleUsers = users.filter(user => {
-                // Add eligibility logic here (e.g., has subscription, has scores)
-                return true;
-            });
-            
-            if (eligibleUsers.length > 0) {
-                // Create a copy of eligible users to modify
-                let remainingUsers = [...eligibleUsers];
-                
-                // Select winners for each match type
-                const matchTypes = ['5-match', '4-match', '3-match'];
-                const prizeAmounts = { '5-match': 500, '4-match': 200, '3-match': 100 };
-                
-                for (const matchType of matchTypes) {
-                    if (remainingUsers.length > 0) {
-                        const randomIndex = Math.floor(Math.random() * remainingUsers.length);
-                        const winner = remainingUsers[randomIndex];
-                        
-                        winners.push({
-                            draw_id: draw._id,
-                            user_id: winner._id,
-                            match_type: matchType,
-                            prize_amount: prizeAmounts[matchType],
-                            verification_status: 'pending'
-                        });
-                        
-                        // Remove selected user from remaining
-                        remainingUsers.splice(randomIndex, 1);
-                    }
-                }
+            const eligibleUsers = users.filter(() => true);
+            const shuffled = [...eligibleUsers];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
             }
-        } else {
-            // Algorithmic selection based on highest scores
-            const usersWithScores = await Promise.all(users.map(async (user) => {
-                const scores = await GolfScore.find({ user_id: user._id }).sort({ score_date: -1 });
-                const totalScore = scores.reduce((sum, s) => sum + s.score, 0);
-                const averageScore = scores.length > 0 ? totalScore / scores.length : 0;
-                return { user, averageScore };
-            }));
             
-            // Sort by average score (highest first) and filter those with scores
-            const eligibleUsers = usersWithScores
-                .filter(item => item.averageScore > 0)
-                .sort((a, b) => b.averageScore - a.averageScore);
-            
-            // Select top 3 as winners
             const matchTypes = ['5-match', '4-match', '3-match'];
             const prizeAmounts = { '5-match': 500, '4-match': 200, '3-match': 100 };
             
-            for (let i = 0; i < Math.min(3, eligibleUsers.length); i++) {
-                const item = eligibleUsers[i];
+            for (let i = 0; i < Math.min(3, shuffled.length); i++) {
                 winners.push({
                     draw_id: draw._id,
-                    user_id: item.user._id,
+                    user_id: shuffled[i]._id,
                     match_type: matchTypes[i],
                     prize_amount: prizeAmounts[matchTypes[i]],
                     verification_status: 'pending'
@@ -289,30 +249,24 @@ router.post('/draws/:id/run', authMiddleware, adminMiddleware, async (req, res) 
             }
         }
         
-        // Save winners to database
         if (winners.length > 0) {
             await Winner.insertMany(winners);
         }
         
-        // Update draw with winning numbers and status
         draw.winning_numbers = winningNumbers;
         draw.status = 'simulated';
         await draw.save();
         
-        // Get created winners with user details
-        const createdWinners = await Winner.find({ draw_id: draw._id })
-            .populate('user_id', 'email full_name');
+        const createdWinners = await Winner.find({ draw_id: draw._id }).populate('user_id', 'email full_name');
         
         res.json({
-            success: true,
             draw,
             winners: createdWinners,
-            winning_numbers: winningNumbers,
-            total_winners: createdWinners.length
+            winning_numbers: winningNumbers
         });
     } catch (error) {
         console.error('Error running draw:', error);
-        res.status(500).json({ error: 'Server error', details: error.message });
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
@@ -368,7 +322,7 @@ router.get('/winners', authMiddleware, adminMiddleware, async (req, res) => {
     }
 });
 
-// Verify winner (approve/reject)
+// Verify winner
 router.put('/winners/:id', authMiddleware, adminMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
@@ -417,6 +371,65 @@ router.post('/winners/:id/pay', authMiddleware, adminMiddleware, async (req, res
     } catch (error) {
         console.error('Error marking winner as paid:', error);
         res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Debug subscriptions endpoint
+router.get('/debug-subscriptions', authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+        const allSubscriptions = await Subscription.find().populate('user_id', 'email full_name');
+        const activeSubscriptions = await Subscription.find({ status: 'active' }).populate('user_id', 'email full_name');
+        
+        res.json({
+            all_subscriptions: allSubscriptions,
+            active_subscriptions: activeSubscriptions,
+            active_count: activeSubscriptions.length,
+            all_count: allSubscriptions.length
+        });
+    } catch (error) {
+        console.error('Debug error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Sync subscriptions endpoint
+router.post('/sync-subscriptions', authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+        const subscriptions = await Subscription.find();
+        let updated = 0;
+        
+        for (const sub of subscriptions) {
+            if (sub.stripe_subscription_id && sub.status !== 'active') {
+                try {
+                    const Stripe = require('stripe');
+                    const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+                    const stripeSub = await stripe.subscriptions.retrieve(sub.stripe_subscription_id);
+                    
+                    if (stripeSub.status === 'active') {
+                        sub.status = 'active';
+                        await sub.save();
+                        updated++;
+                        
+                        await User.findByIdAndUpdate(sub.user_id, {
+                            subscription_status: 'active',
+                            subscription_plan: sub.plan_type
+                        });
+                    }
+                } catch (err) {
+                    console.error(`Error checking subscription ${sub._id}:`, err.message);
+                }
+            }
+        }
+        
+        res.json({
+            success: true,
+            message: `Synced subscriptions, updated ${updated} to active`,
+            total_subscriptions: subscriptions.length,
+            updated
+        });
+    } catch (error) {
+        console.error('Sync error:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 
