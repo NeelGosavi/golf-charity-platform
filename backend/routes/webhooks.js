@@ -7,12 +7,51 @@ const router = express.Router();
 // Initialize Stripe with secret key
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
+// ==================== TEST ENDPOINTS ====================
+
+// Test endpoint to verify route is working
+router.get('/test', (req, res) => {
+    res.json({ 
+        success: true,
+        message: 'Webhook route is working!', 
+        timestamp: new Date().toISOString(),
+        endpoints: {
+            health: '/api/health',
+            webhook: '/api/webhooks/stripe',
+            test: '/api/webhooks/test',
+            testPost: '/api/webhooks/test-post'
+        }
+    });
+});
+
+// Test POST endpoint without Stripe signature
+router.post('/test-post', (req, res) => {
+    console.log('Test POST received:', req.body);
+    res.json({ 
+        success: true,
+        received: true, 
+        body: req.body,
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ==================== STRIPE WEBHOOK ENDPOINT ====================
+
 // Stripe webhook endpoint
 router.post('/stripe', async (req, res) => {
     const sig = req.headers['stripe-signature'];
     let event;
 
-    console.log('Webhook received. Signature:', sig ? 'Present' : 'Missing');
+    console.log('🔔 Webhook received at /stripe endpoint');
+    console.log('   Signature present:', sig ? 'Yes' : 'No');
+    console.log('   Content-Type:', req.headers['content-type']);
+    console.log('   Body length:', req.body ? req.body.length : 0);
+
+    // Check if webhook secret is configured
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+        console.error('❌ STRIPE_WEBHOOK_SECRET is not set in environment variables');
+        return res.status(500).json({ error: 'Webhook secret not configured' });
+    }
 
     try {
         event = stripe.webhooks.constructEvent(
@@ -21,7 +60,7 @@ router.post('/stripe', async (req, res) => {
             process.env.STRIPE_WEBHOOK_SECRET
         );
     } catch (err) {
-        console.error('Webhook signature verification failed:', err.message);
+        console.error('❌ Webhook signature verification failed:', err.message);
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
@@ -41,20 +80,25 @@ router.post('/stripe', async (req, res) => {
             case 'invoice.payment_succeeded':
                 await handlePaymentSuccess(event.data.object);
                 break;
+            case 'invoice.payment_failed':
+                await handlePaymentFailure(event.data.object);
+                break;
             default:
-                console.log(`Unhandled event type: ${event.type}`);
+                console.log(`📝 Unhandled event type: ${event.type}`);
         }
         
         res.json({ received: true });
     } catch (error) {
-        console.error('Webhook handler error:', error);
+        console.error('❌ Webhook handler error:', error);
         res.status(500).json({ error: 'Webhook handler failed' });
     }
 });
 
+// ==================== EVENT HANDLERS ====================
+
 // Handle subscription created
 async function handleSubscriptionCreated(stripeSubscription) {
-    console.log('Processing subscription created:', stripeSubscription.id);
+    console.log('📝 Processing subscription created:', stripeSubscription.id);
     
     // Find subscription by stripe_subscription_id
     const subscription = await Subscription.findOne({
@@ -85,7 +129,7 @@ async function handleSubscriptionCreated(stripeSubscription) {
 
 // Handle subscription update
 async function handleSubscriptionUpdate(stripeSubscription) {
-    console.log('Processing subscription update:', stripeSubscription.id);
+    console.log('📝 Processing subscription update:', stripeSubscription.id);
     
     // First try to find by stripe_subscription_id
     let subscription = await Subscription.findOne({
@@ -94,7 +138,7 @@ async function handleSubscriptionUpdate(stripeSubscription) {
     
     // If not found, try to find by customer ID and create
     if (!subscription) {
-        console.log('Subscription not found, looking up by customer...');
+        console.log('   Subscription not found, looking up by customer...');
         
         // Find user by stripe_customer_id
         const user = await User.findOne({ stripe_customer_id: stripeSubscription.customer });
@@ -146,7 +190,7 @@ async function handleSubscriptionUpdate(stripeSubscription) {
 
 // Handle subscription deletion
 async function handleSubscriptionDelete(stripeSubscription) {
-    console.log('Processing subscription deletion:', stripeSubscription.id);
+    console.log('📝 Processing subscription deletion:', stripeSubscription.id);
     
     const subscription = await Subscription.findOne({
         stripe_subscription_id: stripeSubscription.id
@@ -166,8 +210,8 @@ async function handleSubscriptionDelete(stripeSubscription) {
 
 // Handle successful payment
 async function handlePaymentSuccess(invoice) {
-    console.log('Processing payment success for invoice:', invoice.id);
-    console.log('Subscription ID from invoice:', invoice.subscription);
+    console.log('💰 Processing payment success for invoice:', invoice.id);
+    console.log('   Subscription ID from invoice:', invoice.subscription);
     
     // Find subscription by stripe_subscription_id
     let subscription = await Subscription.findOne({
@@ -195,9 +239,24 @@ async function handlePaymentSuccess(invoice) {
         if (invoice.customer) {
             const user = await User.findOne({ stripe_customer_id: invoice.customer });
             if (user) {
-                console.log(`Found user by customer ID: ${user.email}`);
+                console.log(`   Found user by customer ID: ${user.email}`);
             }
         }
+    }
+}
+
+// Handle payment failure
+async function handlePaymentFailure(invoice) {
+    console.log('⚠️ Payment failed for invoice:', invoice.id);
+    
+    const subscription = await Subscription.findOne({
+        stripe_subscription_id: invoice.subscription
+    });
+    
+    if (subscription) {
+        subscription.status = 'past_due';
+        await subscription.save();
+        console.log(`⚠️ Subscription marked as past_due: ${subscription._id}`);
     }
 }
 

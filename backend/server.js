@@ -8,18 +8,18 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// IMPORTANT: Webhook route MUST come before express.json()
+// ==================== WEBHOOK ROUTE (MUST BE BEFORE express.json()) ====================
 // This needs to be raw body for Stripe signature verification
 app.use('/api/webhooks', express.raw({ type: 'application/json' }), require('./routes/webhooks'));
 
-// Regular JSON middleware for all other routes
+// ==================== MIDDLEWARE ====================
 app.use(cors({
     origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     credentials: true
 }));
 app.use(express.json());
 
-// MongoDB Connection
+// ==================== DATABASE CONNECTION ====================
 mongoose.connect(process.env.MONGODB_URI)
 .then(() => {
     console.log('✅ Connected to MongoDB Atlas');
@@ -31,7 +31,7 @@ mongoose.connect(process.env.MONGODB_URI)
 // Make db available to routes
 app.locals.db = mongoose.connection;
 
-// Import routes
+// ==================== ROUTES ====================
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const scoreRoutes = require('./routes/scores');
@@ -49,13 +49,15 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Use routes
+// API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/scores', scoreRoutes);
 app.use('/api/charities', charityRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/admin', adminRoutes);
+
+// ==================== ERROR HANDLING ====================
 
 // 404 handler
 app.use((req, res) => {
@@ -71,7 +73,10 @@ app.use((err, req, res, next) => {
     });
 });
 
+// ==================== START SERVER ====================
 app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
     console.log(`📡 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🔗 Webhook test: http://localhost:${PORT}/api/webhooks/test`);
+    console.log(`💳 Webhook endpoint: http://localhost:${PORT}/api/webhooks/stripe`);
 });
