@@ -1,0 +1,63 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.development
+
+# Build outputs
+dist/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Database files
+*.sqlite
+*.sqlite-journal
+*.db
+
+# Uploads
+uploads/
+public/uploads/
+
+# Temporary files
+.tmp/
+.cache/
+.temp/
+
+# Stripe webhook test files
+stripe-*.log
+
+# MongoDB files
+dump/
+mongodb-dump/
+
+# Secrets
+secrets.json
+*.key
+*.pem
+*.crt
