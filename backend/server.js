@@ -9,17 +9,38 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // ==================== WEBHOOK ROUTE (MUST BE BEFORE express.json()) ====================
-// This needs to be raw body for Stripe signature verification
 app.use('/api/webhooks', express.raw({ type: 'application/json' }), require('./routes/webhooks'));
 
-// ==================== MIDDLEWARE ====================
+// ==================== CORS CONFIGURATION ====================
+const allowedOrigins = [
+    process.env.FRONTEND_URL,
+    'http://localhost:5173',
+    'http://localhost:3000'
+].filter(Boolean); // Remove any undefined values
+
+console.log('CORS allowed origins:', allowedOrigins);
+
 app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-    credentials: true
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps, curl, etc)
+        if (!origin) return callback(null, true);
+        
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            console.log('CORS blocked origin:', origin);
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With']
 }));
+
+// Regular JSON middleware for all other routes
 app.use(express.json());
 
-// ==================== DATABASE CONNECTION ====================
+// MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI)
 .then(() => {
     console.log('✅ Connected to MongoDB Atlas');
@@ -31,7 +52,7 @@ mongoose.connect(process.env.MONGODB_URI)
 // Make db available to routes
 app.locals.db = mongoose.connection;
 
-// ==================== ROUTES ====================
+// Import routes
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const scoreRoutes = require('./routes/scores');
@@ -57,8 +78,6 @@ app.use('/api/charities', charityRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/admin', adminRoutes);
 
-// ==================== ERROR HANDLING ====================
-
 // 404 handler
 app.use((req, res) => {
     res.status(404).json({ error: 'Route not found' });
@@ -73,10 +92,10 @@ app.use((err, req, res, next) => {
     });
 });
 
-// ==================== START SERVER ====================
 app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
     console.log(`📡 Health check: http://localhost:${PORT}/api/health`);
     console.log(`🔗 Webhook test: http://localhost:${PORT}/api/webhooks/test`);
     console.log(`💳 Webhook endpoint: http://localhost:${PORT}/api/webhooks/stripe`);
+    console.log(`🌐 CORS allowed origins:`, allowedOrigins);
 });
